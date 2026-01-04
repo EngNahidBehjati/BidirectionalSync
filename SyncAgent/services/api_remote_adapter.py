@@ -1,7 +1,7 @@
 import requests
 
 from config.schema import AgentConfig
-from interface_ports.remote_port_interface import IRemotePort
+from interface_ports.remote_port import IRemotePort
 
 
 class HTTPServerAdaptor(IRemotePort):

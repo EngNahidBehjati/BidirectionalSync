@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Literal
-
+## TODO remove
 class SyncAction(BaseModel):
     type: Literal[
         "PULL", "PUSH",
