@@ -1,8 +1,8 @@
 import sys
 from config.config_manager import ConfigManager
 from adapter.api_client import ApiClient
-from state import AgentStateMachine
-from lock import SingleInstanceLock
+from agent import AgentStateMachine
+from lock_manager import SingleInstanceLock
 
 
 def main():

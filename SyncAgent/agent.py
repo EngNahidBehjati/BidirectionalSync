@@ -1,32 +1,46 @@
-from cert import CertificateManager
-from fs.metadata import file_metadata
+from adapter.api_client import ApiClient
+from lock_manager import LockManager, LockError
+from schema.agent_config import AgentConfig
+from certificate_manager import CertificateManager
 
 
-class AgentStateMachine:
-    def __init__(self, cfg, api):
-        self.cfg = cfg
-        self.api = api
-        self.run_id = None
-        self.cert_mgr = CertificateManager(
-            key_path=cfg.ssh_key_path,
-            cert_path=cfg.ssh_cert_path,
+
+class Agent:
+    def __init__(self, config:AgentConfig):
+        self.config = config
+        self.lock = LockManager(config.lock_path)
+        self.certificate_manager = CertificateManager(
+            key_path=config.ssh_key,
+            cert_path=config.ssh_cert,
+            ca_url=config.ca_url,
+            principal=config.principal,
+            ca_fingerprint_path=config.ca_fp,
+            min_valid_seconds=config.min_valid_seconds,
         )
+
+        self.api_client = ApiClient(self.config.api_url, self.config.api_token)
+        self.run_id = None
+
 
     def run(self):
         self._ensure_certificate()
+        try:
+            with self.lock:
+                self._execute_sync()
+        except LockError:
+            return
+
+    def _execute_sync(self):
         self._register_run()
         self._push()
         self._pull()
         self._finalize()
 
     def _ensure_certificate(self):
-        self.cert_mgr.ensure_valid_certificate()
+        self.certificate_manager.ensure()
 
     def _register_run(self):
-        resp = self.api.post("/api/runs/", {
-            "agent_id": self.cfg.agent_id,
-        })
-        self.run_id = resp["id"]
+        self.run_id = self.api_client.get_run(self.config.agent_id, self.lock.lock_start_time)
 
     def _push(self):
         cmd = [
@@ -49,15 +63,15 @@ class AgentStateMachine:
 
         observations = []
         for item in items:
-            p = self.cfg.push_dir / item.path
+            p = self.config.push_dir / item.path
             if p.exists():
                 observations.append({
-                    **file_metadata(p, self.cfg.checksum),
+                    **file_metadata(p, self.config.checksum),
                     "direction": "PUSH",
                     "change": item.change,
                 })
 
-        self.api.post("/api/file-observations/bulk/", {
+        self.api_client.post("/api/file-observations/bulk/", {
             "run_id": self.run_id,
             "items": observations,
         })
@@ -80,4 +94,4 @@ class AgentStateMachine:
         self.rsync_adapter.run_rsync(cmd)
 
     def _finalize(self):
-        self.api.post(f"/api/runs/{self.run_id}/finalize/", {})
+        self.api_client.post(f"/api/runs/{self.run_id}/finalize/", {})

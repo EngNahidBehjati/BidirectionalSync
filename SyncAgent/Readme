@@ -1,0 +1,182 @@
+**SyncAgent
+
+
+1-SSH-CA Configuration:
+
+First step is to make sure there is a CA-machine configured.
+To do this there must be a server (no storage no client servers) that CA-step is installed on it.
+To install CA-step run this commands on the chosen CA-machine:
+    curl -fsSL https://github.com/smallstep/cli/releases/latest/download/step-cli_amd64.deb -o step.deb
+    sudo dpkg -i step.deb
+To initial CA :
+    step ca init \
+          --name "Sync SSH CA" \
+          --dns ca.internal \
+          --address :9000 \
+          --provisioner sync-provisioner \
+          --ssh
+After these the related files would be in their places:
+~/.step/
+├── ca.json
+├── certs/
+│   ├── root_ca.crt
+│   └── intermediate_ca.crt
+├── secrets/
+│   └── intermediate_ca_key
+
+
+Secure Notation:
+    YOU MUST HAVE SECURE root_ca.crt .
+
+To activate CA for User and Host cert add these lines to ~/.step/ca.json
+    "ssh": {
+      "hostKey": {
+        "type": "ed25519"
+      },
+      "userKey": {
+        "type": "ed25519"
+      }
+    }
+
+Next extract public_key_ca for storage
+    step ssh config --roots > trusted_user_ca.pub
+and copy it to /etc/ssh/ca/trusted_user_ca.pub in storage.
+And set this config to only certify "sync-agent" users:
+    step ca provisioner update sync-provisioner \
+          --ssh \
+          --ssh-principal sync-agent \
+          --ssh-principal-regex "^sync-agent$"
+
+
+
+Then configure the ssh on the storage to use CA:
+    TrustedUserCAKeys /etc/ssh/ca/trusted_user_ca.pub
+        AuthorizedKeysFile none
+        PubkeyAuthentication yes
+        PasswordAuthentication no
+Reload the SSH service on the storage:
+    sudo systemctl reload sshd
+
+
+From this point everytime each server wanna access the storage they must first get the certificate form CA-machine:
+    ssh-keygen -t ed25519 -f agent_key -N ""
+
+    step ssh certificate \
+      sync-agent \
+      agent_key.pub \
+      agent_key-cert.pub \
+      --ca-url https://ca.internal:9000 \
+      --fingerprint $(step ca fingerprint)
+
+The related files should be in such directories:
+/etc/sync-agent/
+├── ssh/
+│   ├── agent_key              # long-lived
+│   ├── agent_key.pub
+│   ├── agent_key-cert.pub     # short-lived
+│   └── ca_fingerprint
+├── agent.yaml
+└── logs/
+
+you can change come configuration in agent.yaml:
+ssh:
+  ca_url: https://ca.internal:9000
+  principal: sync-agent
+  min_valid_seconds: 3600   # 1 hour : this means if expiration time is in less than one hour renew the certificate
+
+
+
+
+Connection test to storage:
+    ssh \
+        -i agent_key \
+        -o CertificateFile=agent_key-cert.pub \
+        sync@storage.internal
+
+
+2-Agent (Execution Engine)
+
+Agent is actually a finite_state_machine not a script.
+These are the possible states and their meanings:
+    INIT:
+        load config
+        setup logging
+        validate filesystem paths
+
+    ENSURE_CERT:
+        insure certificate otherwise fail
+
+    ACQUIRE_LOCK:
+        insure there is only one agent running
+        the lock-file is /var/lock/sync-agent.lock
+            if lock not exist:
+                run the agent
+            checking the PID
+                if alive:
+                    clean exit
+                if zombie:
+                    reclaim
+                if lock-corrupt:
+                    reclaim + log
+
+            lock is not a flag it has content to detect zombie
+                {
+                  "pid": 1234,
+                  "start_time": "2026-01-07T09:31:12Z",
+                  "hostname": "agent-01",
+                  "run_id": "a9f3e1..."
+                }
+
+
+    REGISTER_RUN:
+        Registering a run in Django
+        Get run_id
+        idempotent (retry-safe)
+
+    PRE_FLIGHT_CHECK:
+        Non-negotiable Fails => FAILED STATE
+            Free disk space
+            Access to source/target
+            Resolve hostname storage
+            ssh dry-run (without rsync)
+
+
+    PUSH_SYNC:
+        Fail = limited retry
+        Fatal = FAILED STATE
+            rsync agent → storage
+            Only directories are allowed.
+            atomic flags
+            partial allowed
+
+    PULL_SYNC
+
+    VERIFY:
+        Check rsync exit code
+        Checksum (optional)
+        Sanity checks
+
+    REPORT:
+        Submit metrics
+        Submit summary
+        Recording times, data volume
+
+    FINALIZE:
+        Release lock
+        Mark run success
+        Clean temp files
+
+    FAILED:
+        Release lock
+        Mark run failed
+        Send error details
+        No retry here
+
+
+3-Agent Run
+
+   Retry is not a new Run
+   Agent will not do anything without valid run_id
+   Run Registration must be idempotent which means
+        if Agent crush or disconnection or duplicate request sent:
+            the same run return (not a new run)

@@ -1,0 +1,45 @@
+فاز ۱ — هویت و امنیت (IDENTITY FIRST)
+
+قبل از هر sync
+
+1. طراحی SSH CA Architecture
+2. طراحی Certificate Lifecycle (issue / renew / revoke / expiry)
+3. پیاده‌سازی CA side (step-ca یا Vault)
+4. پیاده‌سازی Certificate Manager در Agent
+5. Failure handling برای CA (unreachable / expired / invalid)
+
+⛔ بدون پایان این فاز، rsync اصلاً نباید اجرا شود
+
+فاز ۲ — Agent Core (EXECUTION ENGINE)
+6. طراحی نهایی State Machine Agent
+7. پیاده‌سازی Locking و Single-run guarantee
+8. پیاده‌سازی rsync over SSH CA (production flags)
+9. Resume، atomicity، partial handling
+10. Exit-code classification و retry logic
+فاز ۳ — Control Plane (Django)
+11. طراحی نهایی Data Model (append-only)
+12. پیاده‌سازی Django Models
+13. پیاده‌سازی API Contract (idempotent, bulk)
+14. Indexing و performance tuning
+15. AuthN/AuthZ Agent
+فاز ۴ — Observability & Audit
+16. Structured logging (Agent + Django)
+17. Metrics (run duration, bytes, failures)
+18. Audit trail واقعی (immutable runs)
+19. UI minimum viable dashboard
+فاز ۵ — Operations & Hardening
+20. systemd service + timer
+21. Disk space guards
+22. Log rotation
+23. Disaster scenarios (reboot, network flap)
+24. Security hardening (forced command, restricted user)
+فاز ۶ — Threat Model & Validation
+25. Threat modeling کامل
+26. Attack surface analysis
+27. Abuse cases
+28. Mitigations mapping
+فاز ۷ — Testing & Production Readiness
+29. Failure-based tests
+30. Integration tests
+31. Load tests (TB-scale assumptions)
+32. Acceptance criteria نهایی
